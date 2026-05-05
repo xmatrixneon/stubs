@@ -236,6 +236,71 @@ function getsms($request){
 }
 
 
+function regetnumber($request){
+    try{
+        $db = getMongoDBConnection();
+
+        $params = $_GET;
+        if (!isset($params['api_key']) || !$params['api_key']) {
+            return "BAD_KEY";
+        }
+        if (!isset($params['id']) || !$params['id']) {
+            return "NO_ACTIVATION";
+        }
+        $id = $params['id'];
+        $api_key = $params['api_key'];
+
+        $userdata = $db->users->findOne(['apikey' => $api_key]);
+        if (!$userdata) {
+            return "BAD_KEY";
+        }
+
+        $id = new ObjectId($id);
+        $order = $db->orders->findOne([
+            "_id" => $id,
+            "active" => false
+        ]);
+
+        if(!$order){
+            return "NO_ACTIVATION";
+        }
+
+        // Check if the phone number is still active and not suspended
+        $numberDoc = $db->numbers->findOne([
+            'number' => $order['number'],
+            'active' => true,
+            'suspended' => false
+        ]);
+
+        if (!$numberDoc) {
+            return "NO_ACTIVE_NUMBER";
+        }
+
+        // Reactivate the expired order: clear message array, reset isused, set active to true, reset createdAt
+        $updatedOrder = $db->orders->findOneAndUpdate(
+            ['_id' => $id, 'active' => false],
+            ['$set' => [
+                'message' => [],
+                'isused' => false,
+                'active' => true,
+                'nextsms' => false,
+                'createdAt' => new UTCDateTime(time() * 1000),
+                'updatedAt' => new UTCDateTime(time() * 1000)
+            ]],
+            ['returnDocument' => \MongoDB\Operation\FindOneAndUpdate::RETURN_DOCUMENT_AFTER]
+        );
+
+        if ($updatedOrder) {
+            return "REGET_NUMBER_OK";
+        } else {
+            return "NO_ACTIVATION";
+        }
+
+    } catch (Exception $error){
+        return "NO_ACTIVATION";
+    }
+}
+
 function setcancel($request){
     try{
         $db = getMongoDBConnection();
@@ -329,89 +394,6 @@ $msg = $db->orders->findOneAndUpdate(
     }
 }
 
-function regetnumber($request){
-    try{
-        $db = getMongoDBConnection();
-
-        $params = $_GET;
-
-        // Parameter validation
-        if (!isset($params['api_key']) || !$params['api_key']) {
-            return "BAD_KEY";
-        }
-        if (!isset($params['id']) || !$params['id']) {
-            return "NO_ACTIVATION";
-        }
-
-        $id = $params['id'];
-        $api_key = $params['api_key'];
-
-        // User validation
-        $userdata = $db->users->findOne(['apikey' => $api_key]);
-        if (!$userdata) {
-            return "BAD_KEY";
-        }
-        if (isset($userdata['ban']) && $userdata['ban'] === true) {
-            return "ACCOUNT_BAN";
-        }
-
-        // Order validation
-        $id = new ObjectId($id);
-        $order = $db->orders->findOne([
-            "_id" => $id,
-            "active" => true
-        ]);
-
-        if (!$order) {
-            return "NO_ACTIVATION";
-        }
-
-        // Order must have been used (isused = true) to allow reget
-        if (!$order['isused']) {
-            return "NO_ACTIVATION";
-        }
-
-        // Number validation - check if still active and not suspended
-        $numberData = $db->numbers->findOne([
-            'number' => $order['number'],
-            'active' => true,
-            'suspended' => false
-        ]);
-
-        if (!$numberData) {
-            return "NO_ACTIVE_NUMBER";
-        }
-
-        // Reset the order
-        $updatedOrder = $db->orders->findOneAndUpdate(
-            [
-                '_id' => $id,
-                'active' => true
-            ],
-            [
-                '$set' => [
-                    'message' => [],
-                    'isused' => false,
-                    'nextsms' => false,
-                    'updatedAt' => new MongoDB\BSON\UTCDateTime(time() * 1000)
-                ]
-            ],
-            [
-                'returnDocument' => MongoDB\Operation\FindOneAndUpdate::RETURN_DOCUMENT_AFTER
-            ]
-        );
-
-        if ($updatedOrder) {
-            return "REGET_NUMBER_OK";
-        } else {
-            return "ERROR_DATABASE";
-        }
-
-    } catch (Exception $error){
-        return "ERROR_DATABASE";
-    }
-}
-
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (isset($_GET['action'])) {
         $action = $_GET['action'];
@@ -422,6 +404,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             echo getsms($_GET);
         } elseif ($action == "setStatus") {
             echo setcancel($_GET);
+        } elseif ($action == "regetNumber") {
+            echo regetnumber($_GET);
         }else{
         echo "WRONG_ACTION";
         }
